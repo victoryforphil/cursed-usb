@@ -1,11 +1,11 @@
 {
   "name": "cursed-usb",
-  "version": "1.0.0",
-  "description": "Cursed LSUSB TUI in Bun",
+  "version": "1.1.0",
+  "description": "Live USB device monitor TUI with DFU highlighting",
   "module": "index.ts",
   "type": "module",
   "bin": {
-    "cursed_usb": "./index.ts"
+    "cursed-usb": "./index.ts"
   },
   "scripts": {
     "start": "bun run index.ts"

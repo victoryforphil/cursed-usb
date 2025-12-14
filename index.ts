@@ -1,237 +1,178 @@
 #!/usr/bin/env bun
-import { createCliRenderer, BoxRenderable, TextRenderable } from "@opentui/core";
-import { exec } from "child_process";
-import { promisify } from "util";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import { createCliRenderer, TextRenderable, BoxRenderable, type KeyEvent } from "@opentui/core";
+import { $ } from "bun";
 
-const execAsync = promisify(exec);
-
-// Configuration management
-const CONFIG_DIR = path.join(os.homedir(), ".config", "cursed_tui");
-const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
-
-interface Config {
-  filterDFU: boolean;
-}
-
-function ensureConfigDir() {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
-
-function loadConfig(): Config {
-  ensureConfigDir();
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const data = fs.readFileSync(CONFIG_FILE, "utf-8");
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    // Silently handle error
-  }
-  return { filterDFU: false };
-}
-
-function saveConfig(config: Config) {
-  ensureConfigDir();
-  try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-  } catch (error) {
-    // Silently handle error
-  }
-}
-
-// USB device interface
 interface USBDevice {
   bus: string;
-  device: string;
   id: string;
-  description: string;
+  name: string;
+  isDFU: boolean;
 }
 
 async function getUSBDevices(): Promise<USBDevice[]> {
   try {
-    const { stdout } = await execAsync("lsusb");
-    const lines = stdout.trim().split("\n");
-    return lines.map((line) => {
-      // Parse format: Bus 001 Device 002: ID 8087:8000 Intel Corp.
-      const match = line.match(/Bus (\d+) Device (\d+): ID ([0-9a-f:]+)\s*(.+)?/i);
-      if (match) {
+    const result = await $`lsusb`.text();
+    return result
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => {
+        const match = line.match(/Bus (\d+) Device \d+: ID ([0-9a-f:]+)\s*(.*)/i);
+        if (!match) return null;
+        const name = match[3] || "Unknown";
         return {
           bus: match[1],
-          device: match[2],
-          id: match[3],
-          description: match[4] || "Unknown",
+          id: match[2],
+          name: name.trim(),
+          isDFU: /dfu|download|boot/i.test(name),
         };
-      }
-      return {
-        bus: "???",
-        device: "???",
-        id: "????:????",
-        description: line,
-      };
-    });
-  } catch (error) {
-    // If lsusb is not available, return mock data for testing
-    return [
-      {
-        bus: "001",
-        device: "001",
-        id: "1d6b:0002",
-        description: "Linux Foundation 2.0 root hub",
-      },
-      {
-        bus: "001",
-        device: "002",
-        id: "0483:df11",
-        description: "STMicroelectronics STM Device in DFU Mode",
-      },
-      {
-        bus: "002",
-        device: "001",
-        id: "1d6b:0003",
-        description: "Linux Foundation 3.0 root hub",
-      },
-    ];
+      })
+      .filter((d): d is USBDevice => d !== null);
+  } catch {
+    return [];
   }
-}
-
-function filterDevices(devices: USBDevice[], config: Config): USBDevice[] {
-  if (config.filterDFU) {
-    return devices.filter((dev) => 
-      dev.description.toUpperCase().includes("DFU")
-    );
-  }
-  return devices;
-}
-
-function formatDeviceList(devices: USBDevice[]): string {
-  const lines = [
-    `${"Bus".padEnd(6)} ${"Device".padEnd(8)} ${"ID".padEnd(12)} Description`,
-  ];
-  
-  if (devices.length === 0) {
-    lines.push("No devices found");
-  } else {
-    devices.forEach((dev) => {
-      lines.push(`${dev.bus.padEnd(6)} ${dev.device.padEnd(8)} ${dev.id.padEnd(12)} ${dev.description}`);
-    });
-  }
-  
-  return lines.join("\n");
-}
-
-// Main application
-let config = loadConfig();
-let devices: USBDevice[] = [];
-
-async function updateDevices() {
-  devices = await getUSBDevices();
 }
 
 async function main() {
-  // Create the renderer
-  const renderer = await createCliRenderer({
-    targetFps: 10,
-    exitOnCtrlC: true,
-  });
+  const renderer = await createCliRenderer({ targetFps: 5, exitOnCtrlC: true });
+  renderer.setBackgroundColor("#0f172a");
 
-  // Create main container
-  const container = new BoxRenderable(renderer, {
-    id: "container",
+  // Header
+  const header = new BoxRenderable(renderer, {
+    id: "header",
     width: "100%",
-    height: "100%",
-    padding: 1,
+    height: 3,
+    backgroundColor: "#1e3a5f",
+    borderStyle: "single",
+    borderColor: "#3b82f6",
+    border: true,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  });
+
+  const headerText = new TextRenderable(renderer, {
+    id: "header-text",
+    content: "USB Devices",
+    fg: "#38bdf8",
+  });
+
+  header.add(headerText);
+
+  // Main content area
+  const contentArea = new BoxRenderable(renderer, {
+    id: "content-area",
+    width: "100%",
+    flexGrow: 1,
     flexDirection: "column",
+    backgroundColor: "#1e293b",
+    borderStyle: "single",
+    borderColor: "#475569",
+    border: true,
+    padding: 1,
   });
 
-  // Title
-  const title = new TextRenderable(renderer, {
-    id: "title",
-    content: "Cursed USB Monitor",
-    fg: "cyan",
-    bold: true,
-  });
-
-  // Help text
-  const help = new TextRenderable(renderer, {
-    id: "help",
-    content: "Press 'q' to quit | 'd' to toggle DFU filter | Refreshes every 1s",
-    fg: "gray",
-  });
-
-  // Filter status
-  const filterStatus = new TextRenderable(renderer, {
-    id: "filter-status",
+  // Table header row
+  const tableHeader = new TextRenderable(renderer, {
+    id: "table-header",
     content: "",
-    fg: "yellow",
+    fg: "#94a3b8",
   });
 
-  // Device list
-  const deviceList = new TextRenderable(renderer, {
-    id: "device-list",
+  // Table content
+  const tableContent = new TextRenderable(renderer, {
+    id: "table-content",
     content: "",
-    marginTop: 1,
+    fg: "#e2e8f0",
   });
 
-  // Status
-  const status = new TextRenderable(renderer, {
-    id: "status",
-    content: "",
-    fg: "gray",
-    marginTop: 1,
+  contentArea.add(tableHeader);
+  contentArea.add(tableContent);
+
+  // Footer
+  const footer = new BoxRenderable(renderer, {
+    id: "footer",
+    width: "100%",
+    height: 3,
+    backgroundColor: "#1e3a5f",
+    borderStyle: "single",
+    borderColor: "#475569",
+    border: true,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingLeft: 2,
   });
 
-  // Build the tree
-  renderer.root.add(container);
-  container.add(title);
-  container.add(help);
-  container.add(filterStatus);
-  container.add(deviceList);
-  container.add(status);
+  const footerText = new TextRenderable(renderer, {
+    id: "footer-text",
+    content: "q quit | r refresh",
+    fg: "#64748b",
+  });
 
-  // Update UI with current devices
-  function updateUI() {
-    const filteredDevices = filterDevices(devices, config);
-    
-    // Update all text content
-    filterStatus.content = `Filter: ${config.filterDFU ? "DFU Only ✓" : "All Devices"}`;
-    deviceList.content = formatDeviceList(filteredDevices);
-    status.content = `Total: ${filteredDevices.length} / ${devices.length} devices`;
-    
+  footer.add(footerText);
+
+  // Build tree
+  renderer.root.add(header);
+  renderer.root.add(contentArea);
+  renderer.root.add(footer);
+
+  // State
+  let devices: USBDevice[] = [];
+
+  async function refresh() {
+    devices = await getUSBDevices();
+    render();
+  }
+
+  function render() {
+    const w = renderer.terminalWidth;
+
+    // Header
+    const dfuCount = devices.filter((d) => d.isDFU).length;
+    const dfuBadge = dfuCount > 0 ? `  \x1b[45;97;1m ${dfuCount} DFU \x1b[0m` : "";
+    headerText.content = `\x1b[1;38;5;39mUSB Devices\x1b[0m  \x1b[2m(${devices.length})\x1b[0m${dfuBadge}`;
+
+    // Table header
+    const busW = 5;
+    const idW = 11;
+    const nameW = Math.max(30, w - busW - idW - 12);
+    tableHeader.content = `\x1b[1m${"BUS".padEnd(busW)} ${"ID".padEnd(idW)} ${"NAME".padEnd(nameW)}\x1b[0m\n\x1b[2m${"─".repeat(busW)} ${"─".repeat(idW)} ${"─".repeat(nameW)}\x1b[0m`;
+
+    // Table rows
+    if (devices.length === 0) {
+      tableContent.content = "\x1b[2mNo USB devices found\x1b[0m";
+    } else {
+      const rows = devices.map((d) => {
+        const bus = d.bus.padEnd(busW);
+        const id = d.id.padEnd(idW);
+        const rawName = d.name;
+        const name = rawName.length > nameW ? rawName.slice(0, nameW - 1) + "…" : rawName.padEnd(nameW);
+
+        if (d.isDFU) {
+          return `\x1b[1;93m${bus} ${id} ${name}\x1b[0m`;
+        } else {
+          return `\x1b[2m${bus}\x1b[0m \x1b[36m${id}\x1b[0m ${name}`;
+        }
+      });
+      tableContent.content = rows.join("\n");
+    }
+
     renderer.requestRender();
   }
 
-  // Initial device fetch
-  await updateDevices();
-  updateUI();
-
-  // Setup periodic updates (1000ms = 1s for more stability)
-  setInterval(async () => {
-    try {
-      await updateDevices();
-      updateUI();
-    } catch (error) {
-      // Silently handle update errors
-    }
-  }, 1000);
-
-  // Handle keyboard input
-  renderer.addInputHandler((sequence: string) => {
-    if (sequence === "d" || sequence === "D") {
-      config.filterDFU = !config.filterDFU;
-      saveConfig(config);
-      updateUI();
-      return true;
-    }
-    return false;
+  // Input
+  renderer.keyInput.on("keypress", (key: KeyEvent) => {
+    if (key.name === "q") process.exit(0);
+    if (key.name === "r") refresh();
   });
+
+  // Initial load
+  await refresh();
+
+  // Auto-refresh at 5Hz
+  setInterval(refresh, 200);
 }
 
-main().catch((error) => {
-  console.error("Error:", error);
+main().catch((err) => {
+  console.error("Error:", err);
   process.exit(1);
 });
