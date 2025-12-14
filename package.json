@@ -1,0 +1,22 @@
+{
+  "name": "cursed-usb",
+  "version": "1.0.0",
+  "description": "Cursed LSUSB TUI in Bun",
+  "module": "index.ts",
+  "type": "module",
+  "bin": {
+    "cursed_usb": "./index.ts"
+  },
+  "scripts": {
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.1.60"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
