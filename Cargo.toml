@@ -1,0 +1,11 @@
+[package]
+name = "cursed-usb"
+version = "0.1.0"
+edition = "2021"
+description = "A clean TUI for viewing USB devices"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+color-eyre = "0.6"
